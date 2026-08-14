@@ -149,6 +149,44 @@ func TestAuditAndConcurrentEvaluation(t *testing.T) {
 	}
 }
 
+func TestMissingAttributeDoesNotMatchRule(t *testing.T) {
+	service := flags.NewService()
+	mustUpsert(t, service, flags.Flag{
+		Key: "not-blocked", Enabled: true, Default: "off",
+		Rules: []flags.Rule{{ID: "region-not-blocked", Priority: 1, Value: "on",
+			Conditions: []flags.Condition{{Attribute: "region", Operator: "not_equals", Values: []string{"blocked"}}}}},
+	})
+	mustUpsert(t, service, flags.Flag{
+		Key: "us-only", Enabled: true, Default: "off",
+		Rules: []flags.Rule{{ID: "region-us", Priority: 1, Value: "on",
+			Conditions: []flags.Condition{{Attribute: "region", Operator: "equals", Values: []string{"US"}}}}},
+	})
+	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+
+	missing := flags.Context{SubjectKey: "u-missing"}
+	if ev, _ := service.Evaluate("not-blocked", missing, now); ev.Value != "off" || ev.Reason != "default" {
+		t.Fatalf("not_equals missing region = %+v, want off/default", ev)
+	}
+	if ev, _ := service.Evaluate("us-only", missing, now); ev.Value != "off" || ev.Reason != "default" {
+		t.Fatalf("equals missing region = %+v, want off/default", ev)
+	}
+
+	blocked := flags.Context{SubjectKey: "u-blocked", Attributes: map[string]string{"region": "blocked"}}
+	if ev, _ := service.Evaluate("not-blocked", blocked, now); ev.Value != "off" || ev.Reason != "default" {
+		t.Fatalf("not_equals blocked region = %+v, want off/default", ev)
+	}
+
+	open := flags.Context{SubjectKey: "u-open", Attributes: map[string]string{"region": "open"}}
+	if ev, _ := service.Evaluate("not-blocked", open, now); ev.Value != "on" || ev.Reason != "rule:region-not-blocked" {
+		t.Fatalf("not_equals open region = %+v, want on/rule", ev)
+	}
+
+	us := flags.Context{SubjectKey: "u-us", Attributes: map[string]string{"region": "US"}}
+	if ev, _ := service.Evaluate("us-only", us, now); ev.Value != "on" || ev.Reason != "rule:region-us" {
+		t.Fatalf("equals US region = %+v, want on/rule", ev)
+	}
+}
+
 func TestValidation(t *testing.T) {
 	service := flags.NewService()
 	cases := []flags.Flag{
