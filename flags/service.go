@@ -335,5 +335,9 @@ func cloneFlag(flag Flag) Flag {
 	}
 	flag.Rollout = append([]RolloutOption(nil), flag.Rollout...)
 	flag.Prerequisites = append([]Prerequisite(nil), flag.Prerequisites...)
+	if flag.Schedule != nil {
+		schedule := *flag.Schedule
+		flag.Schedule = &schedule
+	}
 	return flag
 }
