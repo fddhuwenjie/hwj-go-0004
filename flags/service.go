@@ -154,6 +154,7 @@ func (s *Service) evaluateLocked(key string, context Context, at time.Time, visi
 		return Evaluation{}, fmt.Errorf("%w: %s", ErrPrerequisiteCycle, key)
 	}
 	visiting[key] = true
+	defer delete(visiting, key)
 	base := Evaluation{FlagKey: key, Value: flag.Default, Version: flag.Version, EvaluatedAt: at}
 	if !flag.Enabled {
 		base.Reason = "disabled"
