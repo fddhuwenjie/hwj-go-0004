@@ -205,15 +205,15 @@ func scheduleActive(schedule *Schedule, at time.Time) (bool, error) {
 	if schedule == nil {
 		return true, nil
 	}
-	location, err := time.LoadLocation(strings.TrimSpace(schedule.Location))
+	_, err := time.LoadLocation(strings.TrimSpace(schedule.Location))
 	if err != nil {
 		return false, fmt.Errorf("%w: location: %v", ErrInvalidInput, err)
 	}
-	start, err := time.ParseInLocation(localTimeLayout, schedule.Start, location)
+	start, err := time.ParseInLocation(localTimeLayout, schedule.Start, time.UTC)
 	if err != nil {
 		return false, fmt.Errorf("%w: schedule start", ErrInvalidInput)
 	}
-	end, err := time.ParseInLocation(localTimeLayout, schedule.End, location)
+	end, err := time.ParseInLocation(localTimeLayout, schedule.End, time.UTC)
 	if err != nil || !start.Before(end) {
 		return false, fmt.Errorf("%w: schedule end", ErrInvalidInput)
 	}
