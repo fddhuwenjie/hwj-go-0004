@@ -222,10 +222,7 @@ func scheduleActive(schedule *Schedule, at time.Time) (bool, error) {
 
 func ruleMatches(rule Rule, attributes map[string]string) bool {
 	for _, condition := range rule.Conditions {
-		actual, ok := attributes[condition.Attribute]
-		if !ok {
-			return false
-		}
+		actual := attributes[condition.Attribute]
 		matched := false
 		for _, expected := range condition.Values {
 			if actual == expected {
