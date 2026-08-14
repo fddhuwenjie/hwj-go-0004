@@ -149,6 +149,124 @@ func TestAuditAndConcurrentEvaluation(t *testing.T) {
 	}
 }
 
+func TestAuditFilteredLimitAfterEarlierFlags(t *testing.T) {
+	service := flags.NewService()
+	mustUpsert(t, service, flags.Flag{Key: "alpha", Enabled: true, Default: "off"})
+	mustUpsert(t, service, flags.Flag{Key: "beta", Enabled: true, Default: "off"})
+	mustUpsert(t, service, flags.Flag{Key: "gamma", Enabled: true, Default: "off"})
+	base := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+
+	// Evaluate alpha several times first so unrelated earlier events exist.
+	for i := 0; i < 5; i++ {
+		if _, err := service.Evaluate("alpha", flags.Context{SubjectKey: "u"}, base.Add(time.Duration(i)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Then evaluate the target flags several times.
+	for i := 0; i < 6; i++ {
+		if _, err := service.Evaluate("beta", flags.Context{SubjectKey: "u"}, base.Add(time.Duration(10+i)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 4; i++ {
+		if _, err := service.Evaluate("gamma", flags.Context{SubjectKey: "u"}, base.Add(time.Duration(20+i)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Without a limit the target events are all present.
+	all, err := service.QueryAudit(flags.AuditQuery{FlagKey: "beta"})
+	if err != nil || len(all) != 6 {
+		t.Fatalf("no-limit beta count = %d err=%v", len(all), err)
+	}
+
+	// A positive limit must cap matched events, not raw audit index.
+	limited, err := service.QueryAudit(flags.AuditQuery{FlagKey: "beta", Limit: 3})
+	if err != nil || len(limited) != 3 {
+		t.Fatalf("limited beta = %d err=%v", len(limited), err)
+	}
+	for i, event := range limited {
+		if event.FlagKey != "beta" || event.Sequence != all[i].Sequence {
+			t.Fatalf("limited[%d] = %+v want %+v", i, event, all[i])
+		}
+	}
+
+	// Limit larger than available matches returns all matches.
+	big, err := service.QueryAudit(flags.AuditQuery{FlagKey: "beta", Limit: 100})
+	if err != nil || len(big) != 6 {
+		t.Fatalf("over-limit beta = %d err=%v", len(big), err)
+	}
+
+	// Limit equal to available matches returns exactly that many.
+	exact, err := service.QueryAudit(flags.AuditQuery{FlagKey: "gamma", Limit: 4})
+	if err != nil || len(exact) != 4 {
+		t.Fatalf("exact-limit gamma = %d err=%v", len(exact), err)
+	}
+
+	// Limit of 1 returns just the first matching event.
+	one, err := service.QueryAudit(flags.AuditQuery{FlagKey: "beta", Limit: 1})
+	if err != nil || len(one) != 1 || one[0].Sequence != all[0].Sequence {
+		t.Fatalf("limit-1 beta = %+v err=%v", one, err)
+	}
+}
+
+func TestAuditFilteredLimitWithSubjectAndTime(t *testing.T) {
+	service := flags.NewService()
+	mustUpsert(t, service, flags.Flag{Key: "alpha", Enabled: true, Default: "off"})
+	mustUpsert(t, service, flags.Flag{Key: "beta", Enabled: true, Default: "off"})
+	base := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+
+	// Earlier unrelated events for a different subject and flag.
+	for i := 0; i < 4; i++ {
+		if _, err := service.Evaluate("alpha", flags.Context{SubjectKey: "earlier"}, base.Add(time.Duration(i)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Target events for subject "alice" on flag "beta".
+	for i := 0; i < 5; i++ {
+		if _, err := service.Evaluate("beta", flags.Context{SubjectKey: "alice"}, base.Add(time.Duration(10+i)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Unrelated same-flag events for a different subject.
+	for i := 0; i < 3; i++ {
+		if _, err := service.Evaluate("beta", flags.Context{SubjectKey: "bob"}, base.Add(time.Duration(20+i)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Subject filter combined with limit, after earlier unrelated events.
+	limited, err := service.QueryAudit(flags.AuditQuery{FlagKey: "beta", SubjectKey: "alice", Limit: 2})
+	if err != nil || len(limited) != 2 {
+		t.Fatalf("subject+limit beta = %d err=%v", len(limited), err)
+	}
+	for _, event := range limited {
+		if event.SubjectKey != "alice" || event.FlagKey != "beta" {
+			t.Fatalf("unexpected event %+v", event)
+		}
+	}
+
+	// Time range combined with limit.
+	ranged, err := service.QueryAudit(flags.AuditQuery{
+		FlagKey: "beta", SubjectKey: "alice",
+		From: base.Add(11 * time.Second), To: base.Add(13 * time.Second), Limit: 10,
+	})
+	if err != nil || len(ranged) != 2 {
+		t.Fatalf("time+limit beta = %d err=%v", len(ranged), err)
+	}
+	for _, event := range ranged {
+		if event.SubjectKey != "alice" || event.At.Before(base.Add(11 * time.Second)) || !event.At.Before(base.Add(13 * time.Second)) {
+			t.Fatalf("unexpected ranged event %+v", event)
+		}
+	}
+
+	// Subject filter with no limit returns all alice events.
+	all, err := service.QueryAudit(flags.AuditQuery{FlagKey: "beta", SubjectKey: "alice"})
+	if err != nil || len(all) != 5 {
+		t.Fatalf("subject no-limit beta = %d err=%v", len(all), err)
+	}
+}
+
 func TestValidation(t *testing.T) {
 	service := flags.NewService()
 	cases := []flags.Flag{
