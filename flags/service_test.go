@@ -162,3 +162,61 @@ func TestValidation(t *testing.T) {
 		}
 	}
 }
+
+// Mutating any nested configuration in a flag returned by Get must not alter
+// the stored definition or break later evaluations.
+func TestGetReturnsIsolatedNestedState(t *testing.T) {
+	service := flags.NewService()
+	mustUpsert(t, service, flags.Flag{Key: "account", Enabled: true, Default: "free", Rules: []flags.Rule{{ID: "pro", Priority: 1, Value: "pro", Conditions: []flags.Condition{{Attribute: "plan", Operator: "equals", Values: []string{"pro"}}}}}})
+	mustUpsert(t, service, flags.Flag{
+		Key:     "launch",
+		Enabled: true,
+		Default: "off",
+		Rules: []flags.Rule{{ID: "everyone", Priority: 1, Value: "on",
+			Conditions: []flags.Condition{{Attribute: "region", Operator: "not_equals", Values: []string{"blocked"}}}}},
+		Rollout:       []flags.RolloutOption{{Value: "on", Weight: 5000}, {Value: "off", Weight: 5000}},
+		Prerequisites: []flags.Prerequisite{{Key: "account", Value: "pro"}},
+		Schedule:      &flags.Schedule{Start: "2026-08-15T09:00:00", End: "2026-08-15T17:00:00", Location: "America/New_York"},
+	})
+
+	got, err := service.Get("launch")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Corrupt every nested field reachable through the returned value.
+	got.Rules[0].ID = "tampered"
+	got.Rules[0].Conditions[0].Values[0] = "tampered"
+	got.Rollout[0].Value = "tampered"
+	got.Prerequisites[0].Value = "tampered"
+	if got.Schedule != nil {
+		got.Schedule.Start = "garbage"
+		got.Schedule.Location = "not-a-real-timezone"
+	}
+
+	again, err := service.Get("launch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Rules[0].ID == "tampered" || again.Rules[0].Conditions[0].Values[0] == "tampered" {
+		t.Fatalf("rules mutated by caller: %+v", again.Rules[0])
+	}
+	if again.Rollout[0].Value == "tampered" {
+		t.Fatalf("rollout mutated by caller: %+v", again.Rollout)
+	}
+	if again.Prerequisites[0].Value == "tampered" {
+		t.Fatalf("prerequisites mutated by caller: %+v", again.Prerequisites)
+	}
+	if again.Schedule == nil {
+		t.Fatal("schedule is nil after caller mutation")
+	}
+	if again.Schedule.Start == "garbage" || again.Schedule.Location == "not-a-real-timezone" {
+		t.Fatalf("schedule mutated by caller: %+v", again.Schedule)
+	}
+
+	// Evaluate must keep working, proving the stored schedule is untouched.
+	now := time.Date(2026, 8, 15, 14, 0, 0, 0, time.UTC)
+	if _, err := service.Evaluate("launch", flags.Context{SubjectKey: "u1", Attributes: map[string]string{"plan": "pro", "region": "open"}}, now); err != nil {
+		t.Fatalf("evaluate failed after caller mutated returned value: %v", err)
+	}
+}
