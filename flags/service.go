@@ -254,7 +254,10 @@ func (s *Service) QueryAudit(query AuditQuery) ([]AuditEvent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	result := make([]AuditEvent, 0)
-	for _, event := range s.audit {
+	for index, event := range s.audit {
+		if query.Limit > 0 && index == query.Limit {
+			break
+		}
 		if query.FlagKey != "" && event.FlagKey != query.FlagKey {
 			continue
 		}
@@ -268,9 +271,6 @@ func (s *Service) QueryAudit(query AuditQuery) ([]AuditEvent, error) {
 			continue
 		}
 		result = append(result, event)
-		if query.Limit > 0 && len(result) == query.Limit {
-			break
-		}
 	}
 	return append([]AuditEvent(nil), result...), nil
 }
