@@ -1,0 +1,6 @@
+[
+  {"index": 0, "op": "upsert", "ok": true},
+  {"index": 1, "op": "upsert", "ok": true},
+  {"index": 2, "op": "evaluate", "ok": true},
+  {"index": 3, "op": "audit", "ok": true}
+]

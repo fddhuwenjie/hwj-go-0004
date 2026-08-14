@@ -1,0 +1,41 @@
+[
+  {
+    "op": "upsert",
+    "requestId": "setup-account",
+    "flag": {
+      "key": "account",
+      "enabled": true,
+      "default": "free",
+      "rules": [
+        {
+          "id": "paid-plan",
+          "priority": 10,
+          "conditions": [
+            {"attribute": "plan", "operator": "equals", "values": ["pro"]}
+          ],
+          "value": "pro"
+        }
+      ]
+    }
+  },
+  {
+    "op": "upsert",
+    "flag": {
+      "key": "new-search",
+      "enabled": true,
+      "default": "off",
+      "prerequisites": [{"key": "account", "value": "pro"}],
+      "rollout": [
+        {"value": "on", "weight": 2500},
+        {"value": "off", "weight": 7500}
+      ]
+    }
+  },
+  {
+    "op": "evaluate",
+    "key": "new-search",
+    "context": {"subjectKey": "user-42", "attributes": {"plan": "pro"}},
+    "at": "2026-08-15T12:00:00Z"
+  },
+  {"op": "audit", "audit": {"flagKey": "new-search", "limit": 10}}
+]
