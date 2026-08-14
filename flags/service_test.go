@@ -83,6 +83,75 @@ func TestSchedulePrerequisitesAndCycle(t *testing.T) {
 	}
 }
 
+func TestChainPrerequisiteDependency(t *testing.T) {
+	service := flags.NewService()
+	mustUpsert(t, service, flags.Flag{Key: "base", Enabled: true, Default: "on"})
+	mustUpsert(t, service, flags.Flag{Key: "mid", Enabled: true, Default: "on", Prerequisites: []flags.Prerequisite{{Key: "base", Value: "on"}}})
+	mustUpsert(t, service, flags.Flag{Key: "top", Enabled: true, Default: "on", Prerequisites: []flags.Prerequisite{{Key: "mid", Value: "on"}}})
+	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+	result, err := service.Evaluate("top", flags.Context{SubjectKey: "u1"}, now)
+	if err != nil {
+		t.Fatalf("chain evaluate error = %v", err)
+	}
+	if result.Value != "on" {
+		t.Fatalf("chain value = %q, want on", result.Value)
+	}
+	if result.Reason != "default" {
+		t.Fatalf("chain reason = %q, want default", result.Reason)
+	}
+
+	// A failing prerequisite anywhere in the chain surfaces as prerequisite_failed.
+	if _, err := service.Upsert(flags.Flag{Key: "base", Enabled: true, Default: "off"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := service.Evaluate("mid", flags.Context{SubjectKey: "u1"}, now)
+	if err != nil {
+		t.Fatalf("chain failing evaluate error = %v", err)
+	}
+	if failed.Value != "on" || failed.Reason != "prerequisite_failed" {
+		t.Fatalf("chain failing = %+v, want prerequisite_failed", failed)
+	}
+}
+
+func TestDiamondSharedPrerequisite(t *testing.T) {
+	service := flags.NewService()
+	// Diamond: top -> left -> base, top -> right -> base
+	mustUpsert(t, service, flags.Flag{Key: "base", Enabled: true, Default: "on"})
+	mustUpsert(t, service, flags.Flag{Key: "left", Enabled: true, Default: "on", Prerequisites: []flags.Prerequisite{{Key: "base", Value: "on"}}})
+	mustUpsert(t, service, flags.Flag{Key: "right", Enabled: true, Default: "on", Prerequisites: []flags.Prerequisite{{Key: "base", Value: "on"}}})
+	mustUpsert(t, service, flags.Flag{Key: "top", Enabled: true, Default: "on", Prerequisites: []flags.Prerequisite{{Key: "left", Value: "on"}, {Key: "right", Value: "on"}}})
+	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+	result, err := service.Evaluate("top", flags.Context{SubjectKey: "u1"}, now)
+	if err != nil {
+		t.Fatalf("diamond evaluate error = %v", err)
+	}
+	if result.Value != "on" || result.Reason != "default" {
+		t.Fatalf("diamond = %+v, want on/default", result)
+	}
+
+	// A real cycle that passes through a shared node is still detected.
+	mustUpsert(t, service, flags.Flag{Key: "cyc", Enabled: true, Default: "on", Prerequisites: []flags.Prerequisite{{Key: "base", Value: "on"}}})
+	if _, err := service.Upsert(flags.Flag{Key: "base", Enabled: true, Default: "on", Prerequisites: []flags.Prerequisite{{Key: "cyc", Value: "on"}}}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Evaluate("top", flags.Context{SubjectKey: "u1"}, now); !errors.Is(err, flags.ErrPrerequisiteCycle) {
+		t.Fatalf("diamond cycle error = %v", err)
+	}
+}
+
+func TestSelfReferencingPrerequisiteCycle(t *testing.T) {
+	// Even though self-references are rejected at validation time, a two-node
+	// cycle through distinct keys must still return ErrPrerequisiteCycle after
+	// the fix, proving the active-path tracking still detects real cycles.
+	service := flags.NewService()
+	mustUpsert(t, service, flags.Flag{Key: "p", Enabled: true, Default: "on", Prerequisites: []flags.Prerequisite{{Key: "q", Value: "on"}}})
+	mustUpsert(t, service, flags.Flag{Key: "q", Enabled: true, Default: "on", Prerequisites: []flags.Prerequisite{{Key: "p", Value: "on"}}})
+	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+	if _, err := service.Evaluate("p", flags.Context{SubjectKey: "u1"}, now); !errors.Is(err, flags.ErrPrerequisiteCycle) {
+		t.Fatalf("two-node cycle error = %v", err)
+	}
+}
+
 func TestImportAtomicityAndRequestIdempotency(t *testing.T) {
 	service := flags.NewService()
 	batch := []flags.Flag{{Key: "one", Enabled: true, Default: "off"}, {Key: "two", Enabled: true, Default: "off"}}
