@@ -149,6 +149,61 @@ func TestAuditAndConcurrentEvaluation(t *testing.T) {
 	}
 }
 
+func TestScheduleTimezoneWindow(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatalf("load location: %v", err)
+	}
+	service := flags.NewService()
+	mustUpsert(t, service, flags.Flag{
+		Key: "launch", Enabled: true, Default: "off",
+		Schedule: &flags.Schedule{Start: "2026-08-15T09:00:00", End: "2026-08-15T17:00:00", Location: "America/New_York"},
+		Rules:    []flags.Rule{{ID: "everyone", Priority: 1, Value: "on", Conditions: []flags.Condition{{Attribute: "region", Operator: "not_equals", Values: []string{"blocked"}}}}},
+	})
+	ctx := flags.Context{SubjectKey: "u1", Attributes: map[string]string{"region": "open"}}
+
+	// Start/end as New York wall-clock instants; UTC value depends on DST, so
+	// derive the comparison instants from the configured location.
+	start := time.Date(2026, 8, 15, 9, 0, 0, 0, loc)
+	end := time.Date(2026, 8, 15, 17, 0, 0, 0, loc)
+
+	cases := []struct {
+		name    string
+		at      time.Time
+		inside  bool
+	}{
+		{"just before local start (exclusive)", start.Add(-1 * time.Second), false},
+		{"exactly at local start (inclusive)", start, true},
+		{"2pm New York via UTC instant", time.Date(2026, 8, 15, 18, 0, 0, 0, time.UTC), true},
+		{"just before local end", end.Add(-1 * time.Second), true},
+		{"exactly at local end (exclusive)", end, false},
+		{"after local end", end.Add(1 * time.Hour), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := service.Evaluate("launch", ctx, tc.at)
+			if err != nil {
+				t.Fatalf("evaluate: %v", err)
+			}
+			if tc.inside {
+				if res.Reason == "outside_schedule" {
+					t.Fatalf("%s = outside_schedule, want inside window: %+v", tc.at, res)
+				}
+				if res.Value != "on" || res.Reason != "rule:everyone" {
+					t.Fatalf("inside window = %+v, want rule:everyone=on", res)
+				}
+			} else {
+				if res.Reason != "outside_schedule" {
+					t.Fatalf("%s = %+v, want outside_schedule", tc.at, res)
+				}
+				if res.Value != "off" {
+					t.Fatalf("outside window value = %s, want off", res.Value)
+				}
+			}
+		})
+	}
+}
+
 func TestValidation(t *testing.T) {
 	service := flags.NewService()
 	cases := []flags.Flag{
